@@ -153,32 +153,33 @@ def _load(reg, value):
 
 def _save():
     # Save original SP before decrement, inside the frame about to be reserved.
+    # AT is captured before scratch use; K0/K1 are volatile across interrupts.
     lines = ["sq $sp, -16($sp)", f"addiu $sp, $sp, -{FRAME}"]
     lines += [f"sq ${i}, {i * 16}($sp)" for i in range(1, 32) if i != 29]
     lines += [f"swc1 $f{i}, {0x200 + i * 4}($sp)" for i in range(32)]
     lines += [
-        "pmfhi $k0",
-        "sq $k0, 640($sp)",
-        "pmflo $k0",
-        "sq $k0, 656($sp)",
-        "mfsa $k0",
-        "sw $k0, 672($sp)",
-        "cfc1 $k0, $31",
-        "sw $k0, 676($sp)",
+        "pmfhi $at",
+        "sq $at, 640($sp)",
+        "pmflo $at",
+        "sq $at, 656($sp)",
+        "mfsa $at",
+        "sw $at, 672($sp)",
+        "cfc1 $at, $31",
+        "sw $at, 676($sp)",
     ]
     return lines
 
 
 def _restore():
     lines = [
-        "lq $k0, 640($sp)",
-        "pmthi $k0",
-        "lq $k0, 656($sp)",
-        "pmtlo $k0",
-        "lw $k0, 672($sp)",
-        "mtsa $k0",
-        "lw $k0, 676($sp)",
-        "ctc1 $k0, $31",
+        "lq $at, 640($sp)",
+        "pmthi $at",
+        "lq $at, 656($sp)",
+        "pmtlo $at",
+        "lw $at, 672($sp)",
+        "mtsa $at",
+        "lw $at, 676($sp)",
+        "ctc1 $at, $31",
     ]
     lines += [f"lwc1 $f{i}, {0x200 + i * 4}($sp)" for i in range(32)]
     lines += [f"lq ${i}, {i * 16}($sp)" for i in range(1, 32) if i != 29]

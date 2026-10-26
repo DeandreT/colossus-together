@@ -6,6 +6,7 @@ import shutil
 from dataclasses import replace
 
 import pytest
+from interrupt_model import InterruptModel
 
 from native_lifecycle import hooks as h
 
@@ -71,7 +72,7 @@ NAMES = dict(
 MASK64 = (1 << 64) - 1
 
 
-class Machine:
+class Machine(InterruptModel):
     """Execute emitted instructions, not a second high-level hook implementation.
 
     External callees deliberately clobber every register except SP/RA, including
@@ -126,9 +127,8 @@ class Machine:
         args = tuple(self.low(r) for r in ("a0", "a1"))
         self.events.append((name, args))
         if name in ("original_group_add", "previous_free_target"):
-            for i in range(1, 32):
-                if i not in (29, 31):
-                    assert self.r[i] == self.entry[0][i], f"altered input register {i}"
+            for i in self.compared_registers():
+                assert self.r[i] == self.entry[0][i], f"altered input register {i}"
             assert self.low("sp") == (self.entry[0][29] & MASK64) - h.FRAME
             assert self.low("sp") % 16 == 0
             self.clobber(101)
@@ -153,6 +153,7 @@ class Machine:
         pc = labels[name]
         for _ in range(1000):
             line = lines[pc]
+            self.boundary(line)
             pc += 1
             op, *tail = line.split(maxsplit=1)
             args = tail[0].split(", ") if tail else []
@@ -160,13 +161,18 @@ class Machine:
                 continue
             if op in ("beq", "bne", "jal", "jr"):
                 assert lines[pc] == "nop", "interpreter requires explicit no-op delay"
+                take = op in ("jal", "jr") or (
+                    (self.low(args[0]) == self.low(args[1])) == (op == "beq")
+                )
+                if op == "jal":
+                    self.set("ra", 0x1400000 + (pc + 1) * 4)
+                self.boundary(lines[pc])
                 pc += 1
                 if op == "jr":
                     return
                 if op == "jal":
-                    self.set("ra", 0x1400000 + pc * 4)
                     self.external(args[0])
-                elif (self.low(args[0]) == self.low(args[1])) == (op == "beq"):
+                elif take:
                     pc = labels[args[2]]
                 continue
             if op in ("sq", "lq", "sw", "lw", "swc1", "lwc1"):
@@ -228,7 +234,7 @@ class Machine:
     def assert_preserved(self):
         expected = self.post[0].copy()
         expected[29], expected[31] = self.entry[0][29], self.entry[0][31]
-        assert self.snapshot() == (expected, *self.post[1:])
+        self.assert_context(self.snapshot(), (expected, *self.post[1:]))
         # All memory reads are in the private frame: never inspect the actor,
         # freed allocation, group contents, or a host-controlled function table.
         sp = self.entry[0][29] & MASK64

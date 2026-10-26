@@ -47,9 +47,8 @@ class Machine(model.Machine):
                 else "previous_alias_entry"
             )
             assert self.post is None, "previous constructor must run exactly once"
-            for i in range(1, 32):
-                if i not in (29, 31):
-                    assert self.r[i] == self.entry[0][i], f"changed input register {i}"
+            for i in self.compared_registers():
+                assert self.r[i] == self.entry[0][i], f"changed input register {i}"
             assert h.PRE_FRAME <= 128
             assert self.low("sp") == (self.entry[0][29] & model.MASK64) - h.PRE_FRAME
             assert self.low("sp") % 16 == 0
@@ -77,7 +76,7 @@ class Machine(model.Machine):
     def assert_preserved(self):
         expected = self.post[0].copy()
         expected[29], expected[31] = self.entry[0][29], self.entry[0][31]
-        assert self.snapshot() == (expected, *self.post[1:])
+        self.assert_context(self.snapshot(), (expected, *self.post[1:]))
         sp = self.entry[0][29] & model.MASK64
         assert all(sp - h.PRE_FRAME - h.FRAME <= address < sp for address in self.reads)
 
