@@ -37,6 +37,7 @@ shared checkpoint. The single Agro is controlled by its current rider.
 - `streaming/`: two-player streaming-interest planning and native adapter components.
 - `horse_call/`: generation-bound whistle ownership and separate camera-interest
   bookkeeping, with game integration supplied by explicit adapters.
+- `horse_mount/`: guarded, read-only rejection of already occupied mount requests.
 - `tests/`: synthetic protocol, linking, patch-safety and lifecycle tests.
 
 These packages are building blocks, not an automatic game installer. Running
