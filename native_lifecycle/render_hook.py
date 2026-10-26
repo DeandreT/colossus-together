@@ -51,6 +51,20 @@ stack and must not be reclaimed while busy. Nested entry latches both stack and
 counter faults, leaves busy set for its owner, and returns without rendering;
 that fail-closed return does NOT simulate a working render frame. The wrapper
 does not establish general concurrent/reentrant safety or detect stack overflow.
+
+Optional prepare_target/prepare_context run prepare(context) on the acquired
+private stack before any actual render call. Both require target_stack. A
+temporary private frame preserves all incoming GPR/FPU/HI/LO/SA/FCSR state and
+is popped before rendering, so renderer recursion has the same stack headroom.
+The callback may yield under the same scheduler/ownership contract as the
+renderer; its context must remain valid throughout that yield. It must handle
+its own GP and leave FPACC/VU state untouched. Context validation covers the
+pointer word, not an unknown full context extent; ownership is caller-attested.
+Zero means prepared. Nonzero skips render/fence and counter advancement,
+latches both faults, releases only this invocation's acquired stack, and
+returns low 64 bits of v0 = 1 (upper 64 bits retained from incoming v0).
+Every other incoming register and original full-width SP/RA is restored.
+Preparation failure is not a simulated successful render frame.
 """
 
 import os
@@ -99,6 +113,8 @@ class Config:
     fence_state: int | None = None
     target_stack: tuple[int, int] | None = None
     stack_state: int | None = None
+    prepare_target: int | None = None
+    prepare_context: int | None = None
 
     @property
     def code_size(self):
@@ -126,6 +142,17 @@ class Config:
             raise ValueError("fence_target and fence_state must be configured together")
         if self.fence_state is not None and not _address(self.fence_state):
             raise ValueError("fence_state must be an aligned physical EE pointer")
+        if (self.prepare_target is None) != (self.prepare_context is None):
+            raise ValueError(
+                "prepare_target and prepare_context must be configured together"
+            )
+        if self.prepare_target is not None:
+            if self.target_stack is None:
+                raise ValueError("prepare requires an owned private target_stack")
+            if not _address(self.prepare_context):
+                raise ValueError(
+                    "prepare_context must be an aligned physical EE pointer"
+                )
         spans = [(self.code, self.code_size), (self.counter, COUNTER_SIZE)]
         for base, size in self.trusted_code:
             if not _address(base, 4) or type(size) is not int or size <= 0 or size % 4:
@@ -142,12 +169,14 @@ class Config:
         targets = (old_target, self.actual_render)
         if self.fence_target is not None:
             targets += (self.fence_target,)
+        if self.prepare_target is not None:
+            targets += (self.prepare_target,)
         for target in targets:
             if not _address(target) or not any(
                 b <= target and target + 4 <= b + n for b, n in self.trusted_code
             ):
                 raise ValueError(
-                    "render and fence targets must be trusted physical code"
+                    "render, fence and prepare targets must be trusted physical code"
                 )
         if self.fence_target is not None:
             if (self.code + self.code_size) >> 28 != self.fence_target >> 28:
@@ -200,6 +229,16 @@ class Config:
                         "target stack/state overlaps code, counter or context"
                     )
                 excluded.append((start, extent))
+            if self.prepare_target is not None:
+                if (self.code + self.code_size) >> 28 != self.prepare_target >> 28:
+                    raise ValueError("prepare outside wrapper JAL segment")
+                if any(
+                    self.prepare_context < b + n and b < self.prepare_context + 4
+                    for b, n in excluded
+                ):
+                    raise ValueError(
+                        "prepare context overlaps code, counter, stack or context"
+                    )
 
 
 def guard_expectations(c):
@@ -238,7 +277,7 @@ def _stack_entry():
     return lines + ["lq $t0, 0($sp)", "lq $t1, 16($sp)"]
 
 
-def _stack_return(fenced):
+def _stack_return(fenced, *, prepare_failed=False):
     # Use the original outer frame as the final scratch bridge, then leave the
     # private stack BEFORE releasing busy. Every other post-render register is
     # restored untouched; the last two loads recover full 128-bit t0/t1.
@@ -261,13 +300,45 @@ def _stack_return(fenced):
             f"lq $sp, {PRE_SP}($sp)",
         ]
     lines += _load("$t0", "stack_state")
-    return lines + [
+    lines += [
         f"sw $zero, {STACK_BUSY}($t0)",
         f"lq $t1, {16 - PRE_FRAME}($sp)",
         f"lq $t0, -{PRE_FRAME}($sp)",
-        "jr $ra",
-        "nop",
     ]
+    if prepare_failed:
+        lines.append("addiu $v0, $zero, 1")
+    return lines + ["jr $ra", "nop"]
+
+
+def _prepare():
+    # OUTER_SP is the full private SP for the success path, not original SP.
+    # Save it before allocation; _capture does not itself capture SP.
+    lines = ["sq $sp, -16($sp)", f"addiu $sp, $sp, -{POST_FRAME}"]
+    lines += _capture()
+    lines += [
+        f"lq $k0, {POST_FRAME + PRE_RA}($sp)",
+        f"sq $k0, {OUTER_RA}($sp)",
+    ]
+    lines += _load("$a0", "prepare_context")
+    lines += ["jal prepare_target", "nop", "bne $v0, $zero, prepare_failed", "nop"]
+    # Restore incoming state and private pre-call SP, then fall through to the
+    # actual renderer without keeping this frame on its recursive call stack.
+    return lines + _restore()[:-2]
+
+
+def _prepare_failed():
+    lines = ["prepare_failed:"]
+    lines += _load("$t0", "counter")
+    lines += ["addiu $t1, $zero, 1", f"sw $t1, {COUNTER_FAULT}($t0)"]
+    lines += _load("$t0", "stack_state")
+    lines += [
+        f"sw $t1, {STACK_FAULT}($t0)",
+        # Switch the saved return SP from private to original before using the
+        # same full-state restore/ownership release as a completed frame.
+        f"lq $t0, {POST_FRAME + PRE_SP}($sp)",
+        f"sq $t0, {OUTER_SP}($sp)",
+    ]
+    return lines + _stack_return(True, prepare_failed=True)
 
 
 def _stack_rejected():
@@ -303,6 +374,8 @@ def render(c, words):
     ]
     if c.target_stack is not None:
         lines += _stack_entry()
+    if c.prepare_target is not None:
+        lines += _prepare()
     lines += ["jal actual_render", "nop"]
     if c.fence_target is None:
         lines += [f"sq $t{i}, {i * 16}($sp)" for i in range(4)]
@@ -355,6 +428,8 @@ def render(c, words):
     if c.target_stack is not None:
         lines += _stack_return(c.fence_target is not None)
         lines += _stack_rejected()
+        if c.prepare_target is not None:
+            lines += _prepare_failed()
     elif c.fence_target is None:
         lines += [f"lq $t{i}, {i * 16}($sp)" for i in range(4)]
         lines += [f"lq $ra, {PRE_RA}($sp)", f"lq $sp, {PRE_SP}($sp)", "jr $ra", "nop"]
@@ -425,6 +500,14 @@ def build(c, words, *, assembler=None, objcopy=None):
                         "stack_state": c.stack_state,
                     }
                     if c.target_stack is not None
+                    else {}
+                ),
+                **(
+                    {
+                        "prepare_target": c.prepare_target,
+                        "prepare_context": c.prepare_context,
+                    }
+                    if c.prepare_target is not None
                     else {}
                 ),
             },

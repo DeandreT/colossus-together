@@ -38,6 +38,12 @@ def stacked_config(fenced=False, size=0x10000):
     )
 
 
+def prepared_config(fenced=True):
+    return replace(
+        stacked_config(fenced), prepare_target=0x1601C00, prepare_context=0x1528040
+    )
+
+
 class Yielded(Exception):
     pass
 
@@ -58,11 +64,14 @@ class Machine(model.Machine):
         yields=False,
         fence_result=0,
         fence_yields=False,
+        prepare_result=0,
+        prepare_yields=False,
     ):
         super().__init__(SimpleNamespace(canonical_group=0x830000))
         self.c, self.result, self.yields = c, result, yields
         self.fence_result = fence_result
         self.fence_yields = fence_yields
+        self.prepare_result, self.prepare_yields = prepare_result, prepare_yields
         for i in range(4, 12):
             self.r[i] = ((0xFEDCBA + i) << 96) | (0x830000 + i * 16)
         # Model entry after the original call site's unchanged delay word.
@@ -100,8 +109,26 @@ class Machine(model.Machine):
         ) - h.PRE_FRAME
 
     def external(self, name):
+        if name == "prepare_target":
+            assert self.events == []
+            assert self.low("a0") == self.c.prepare_context
+            assert self.low("sp") == self.render_sp - h.POST_FRAME
+            assert self.mem[self.c.stack_state] == 1
+            assert {
+                a: self.mem[a] for a in self.initial_counter
+            } == self.initial_counter
+            self.events.append(name)
+            for offset in range(0, 64, 16):
+                self.mem[self.low("sp") + offset] = (1 << 125) | offset
+            if self.prepare_yields:
+                raise Yielded
+            self.clobber(707)
+            self.set("v0", self.prepare_result)
+            return
         if name == "fence_target":
-            assert self.events == ["actual_render"]
+            assert self.events == (
+                ["prepare_target"] if self.c.prepare_target is not None else []
+            ) + ["actual_render"]
             assert self.low("a0") == self.c.fence_state
             assert self.low("sp") == self.render_sp - h.POST_FRAME
             assert self.low("sp") % 16 == 0
@@ -119,16 +146,21 @@ class Machine(model.Machine):
             self.set("v0", self.fence_result)
             return
         assert name == "actual_render"
-        assert not self.events, "exactly one actual render call"
+        assert self.events == (
+            ["prepare_target"] if self.c.prepare_target is not None else []
+        ), "exactly one actual render call"
         self.events.append(name)
         for i in range(1, 32):
             if i not in (29, 31):
                 assert self.r[i] == self.entry[0][i], f"changed input {i}"
+        assert self.snapshot()[1:] == self.entry[1:], (
+            "changed incoming FPU/special state"
+        )
         assert self.low("sp") == self.render_sp
         assert self.low("sp") % 16 == 0
         if self.c.target_stack is not None:
             assert self.mem[self.c.stack_state] == 1
-            # Model 8 KiB of renderer stack use, beyond st_disp's 4 KiB.
+            # Synthetic 8 KiB renderer stack use, beyond a 4 KiB caller stack.
             for offset in range(16, 8193, 16):
                 address = self.low("sp") - offset
                 base, size = self.c.target_stack
@@ -151,7 +183,7 @@ class Machine(model.Machine):
             elif not line.startswith("."):
                 lines.append(line)
         pc = self.continuation if resume else labels["hook_render"]
-        for _ in range(500):
+        for _ in range(1000):
             op, *tail = lines[pc].split(maxsplit=1)
             pc += 1
             args = tail[0].split(", ") if tail else []
@@ -233,7 +265,9 @@ class Machine(model.Machine):
         expected = self.post[0].copy()
         expected[29], expected[31] = self.entry[0][29], self.entry[0][31]
         assert self.snapshot() == (expected, *self.post[1:])
-        assert self.events == ["actual_render"] + (
+        assert self.events == (
+            ["prepare_target"] if self.c.prepare_target is not None else []
+        ) + ["actual_render"] + (
             ["fence_target"] if self.c.fence_target is not None else []
         )
         sp = self.entry[0][29] & model.MASK64
@@ -380,6 +414,172 @@ def test_default_assembly_remains_byte_for_byte_unchanged():
     )
 
 
+@pytest.mark.parametrize(
+    "fenced,expected",
+    [
+        (False, "400140c605f34ac23817374e196c61e09dadd72892f5af3bdcf3c7a6f20aeefc"),
+        (True, "a0de651f7a1a85ebb27edd71132a59bb4fd7f323e6488a9edcdf7e3e1bd734a8"),
+    ],
+)
+def test_no_prepare_private_stack_assembly_is_unchanged(fenced, expected):
+    c = stacked_config(fenced)
+    assert (
+        hashlib.sha256(h.render(c, h.guard_expectations(c)).encode()).hexdigest()
+        == expected
+    )
+
+
+@pytest.mark.parametrize("fenced", [False, True])
+@pytest.mark.parametrize("result", [0, 0x850000])
+@pytest.mark.parametrize("count", [19, 0xFFFFFFFF, (1 << 64) - 1])
+@pytest.mark.parametrize("fence_result", [0, 7])
+def test_prepare_restores_full_incoming_state_before_render_and_preserves_poststate(
+    fenced, result, count, fence_result
+):
+    c = prepared_config(fenced)
+    m = Machine(c, count, result, fence_result=fence_result)
+    m.run()
+    m.assert_preserved()
+    assert m.mem[c.stack_state] == 0
+    assert m.mem[c.stack_state + h.STACK_FAULT] == 0
+    expected = count if fenced and fence_result else min(count + 1, (1 << 64) - 1)
+    assert m.mem[c.counter] | (m.mem[c.counter + 4] << 32) == expected
+    assert m.mem[c.counter + h.COUNTER_FAULT] == int(
+        bool(fenced and fence_result) or count == (1 << 64) - 1
+    )
+    assert m.mem[c.stack_state + h.STACK_HIGHWATER] == 0x1234
+
+
+@pytest.mark.parametrize("fenced", [False, True])
+@pytest.mark.parametrize("status", [1, 7, 0xFFFFFFFF])
+def test_prepare_failure_restores_incoming_state_returns_one_and_never_draws(
+    fenced, status
+):
+    c = prepared_config(fenced)
+    m = Machine(c, 0x100000002, prepare_result=status)
+    m.run()
+    expected = m.entry[0].copy()
+    expected[2] = (expected[2] & ~model.MASK64) | 1
+    assert m.snapshot() == (expected, *m.entry[1:])
+    assert m.events == ["prepare_target"]
+    assert m.post is None
+    assert m.mem[c.counter] == 2 and m.mem[c.counter + 4] == 1
+    assert m.mem[c.counter + h.COUNTER_FAULT] == 1
+    assert m.mem[c.stack_state] == 0
+    assert m.mem[c.stack_state + h.STACK_FAULT] == 1
+    assert m.mem[c.stack_state + h.STACK_HIGHWATER] == 0x1234
+    assert m.mem[c.stack_state + 12] == 0xABCD
+    assert not m.deep_writes
+
+
+@pytest.mark.parametrize("status", [0, 7])
+def test_yielded_prepare_retains_private_owner_and_resumes_safely(status):
+    c = prepared_config()
+    m = Machine(c, 19, 0x850000, prepare_yields=True)
+    with pytest.raises(Yielded):
+        m.run()
+    assert m.events == ["prepare_target"]
+    assert m.low("sp") == m.render_sp - h.POST_FRAME
+    assert m.mem[c.stack_state] == 1
+    assert m.mem[c.counter] == 19
+    m.clobber(707)
+    m.set("v0", status)
+    m.run(resume=True)
+    assert m.mem[c.stack_state] == 0
+    if status:
+        expected = m.entry[0].copy()
+        expected[2] = (expected[2] & ~model.MASK64) | 1
+        assert m.snapshot() == (expected, *m.entry[1:])
+        assert m.events == ["prepare_target"]
+        assert m.mem[c.counter] == 19
+    else:
+        m.assert_preserved()
+        assert m.mem[c.counter] == 20
+
+
+def test_prepare_reentry_cannot_reuse_or_release_suspended_owner_stack():
+    c = prepared_config()
+    owner = Machine(c, 19, prepare_yields=True)
+    with pytest.raises(Yielded):
+        owner.run()
+    nested = Machine(c)
+    nested.mem = owner.mem
+    nested.r = owner.r.copy()
+    nested.f = owner.f.copy()
+    nested.hi, nested.lo, nested.sa, nested.fcsr = (
+        owner.hi,
+        owner.lo,
+        owner.sa,
+        owner.fcsr,
+    )
+    nested.entry = nested.snapshot()
+    nested.run()
+    assert nested.snapshot() == nested.entry
+    assert not nested.events
+    assert owner.mem[c.stack_state] == 1
+    assert owner.mem[c.stack_state + h.STACK_FAULT] == 1
+    assert owner.mem[c.counter] == 19
+    assert owner.mem[c.counter + h.COUNTER_FAULT] == 1
+    owner.clobber(707)
+    owner.set("v0", 7)
+    owner.run(resume=True)
+    assert owner.mem[c.stack_state] == 0
+    assert owner.events == ["prepare_target"]
+    assert owner.mem[c.counter] == 19
+
+
+@pytest.mark.parametrize("fenced,code_bytes", [(False, 1280), (True, 1880)])
+def test_prepare_temporary_frame_is_popped_and_code_fits_existing_reservation(
+    fenced, code_bytes
+):
+    c = prepared_config(fenced)
+    text = h.render(c, h.guard_expectations(c))
+    preparation = text.split("jal prepare_target\n", 1)[1].split(
+        "jal actual_render\n", 1
+    )[0]
+    assert f"lq $sp, {h.OUTER_SP}($sp)" in preparation
+    assert "addiu $sp" not in preparation
+    instructions = [
+        line
+        for line in text.splitlines()
+        if not line.startswith(".") and not line.endswith(":")
+    ]
+    assert len(instructions) * 4 == code_bytes
+    assert code_bytes <= c.code_size - 32
+    assert c.code_size == 0x800
+
+
+@pytest.mark.parametrize(
+    "changes",
+    [
+        {"prepare_target": None},
+        {"prepare_context": None},
+        {"target_stack": None, "stack_state": None},
+        {"prepare_target": True},
+        {"prepare_target": 0xA1601C00},
+        {"prepare_target": 0x1601C02},
+        {"prepare_target": 0x1602000},
+        {"prepare_target": 0x1400100},
+        {"call_site": 0x1601C00},
+        {"prepare_context": True},
+        {"prepare_context": 0},
+        {"prepare_context": 0x1528041},
+        {"prepare_context": 0x2000000},
+        {"prepare_context": 0xA1528040},
+        {"prepare_context": 0x1400100},
+        {"prepare_context": 0x1508034},
+        {"prepare_context": 0x1601C00},
+        {"prepare_context": 0x320004},
+        {"prepare_context": 0x170000C},
+        {"prepare_context": 0x180FFF0},
+        {"prepare_context": 0x1518040},
+    ],
+)
+def test_prepare_requires_private_stack_and_safe_trusted_bindings(changes):
+    with pytest.raises(ValueError):
+        replace(prepared_config(), **changes)
+
+
 @pytest.mark.parametrize("fenced,fence_result", [(False, 0), (True, 0), (True, 7)])
 @pytest.mark.parametrize("result", [0, 0x850000])
 @pytest.mark.parametrize("count", [19, 0xFFFFFFFF, (1 << 64) - 1])
@@ -388,15 +588,15 @@ def test_private_stack_deep_render_preserves_original_stack_and_poststate(
 ):
     c = stacked_config(fenced)
     m = Machine(c, count, result, fence_result=fence_result)
-    original_sp = 0x1069A30
+    original_sp = 0x1204000
     m.r[29] = (0xFEDCBA9876543210 << 64) | original_sp
     m.entry = m.snapshot()
-    # Include the old stack and the object below it that motivated the guard.
+    # Synthetic caller stack and a neighboring object, never a runtime capture.
     original = {
         address: 0xDA7A0000 + address
         for address in range(original_sp - 0x1100, original_sp, 16)
     }
-    original[0x106897C] = 0xD15F1A7
+    original[0x1202F40] = 0xD15F1A7
     m.mem.update(original)
     m.run()
     m.assert_preserved()
@@ -638,11 +838,21 @@ ASSEMBLER = os.environ.get("SOTC_EE_AS") or shutil.which("mips64r5900el-ps2-elf-
 @pytest.mark.skipif(not ASSEMBLER, reason="optional EE binutils not configured")
 @pytest.mark.parametrize("shift", [0, 0x18000])
 @pytest.mark.parametrize("fenced", [False, True])
-@pytest.mark.parametrize("stacked", [False, True])
+@pytest.mark.parametrize(
+    "stacked,prepared", [(False, False), (True, False), (True, True)]
+)
 def test_real_assembler_link_and_four_byte_patch_without_counter_initialization(
-    shift, fenced, stacked
+    shift, fenced, stacked, prepared
 ):
-    c = stacked_config(fenced) if stacked else fenced_config() if fenced else config()
+    c = (
+        prepared_config(fenced)
+        if prepared
+        else stacked_config(fenced)
+        if stacked
+        else fenced_config()
+        if fenced
+        else config()
+    )
     c = replace(c, code=c.code + shift, counter=c.counter + shift)
     words = h.guard_expectations(c)
     before = dict(words)
@@ -672,7 +882,9 @@ def test_real_assembler_link_and_four_byte_patch_without_counter_initialization(
         if word >> 26 == 3:
             calls.append(((pc + 4) & 0xF0000000) | ((word & 0x3FFFFFF) << 2))
             assert instructions[pc + 4] == 0
-    assert calls == [c.actual_render] + ([c.fence_target] if fenced else [])
+    assert calls == ([c.prepare_target] if prepared else []) + [c.actual_render] + (
+        [c.fence_target] if fenced else []
+    )
     # Verify the paired HI16/LO16 relocation reconstructs the external counter.
     start = built.linked.exports["hook_render"]
     if not fenced and not stacked:
@@ -694,6 +906,11 @@ def test_real_assembler_link_and_four_byte_patch_without_counter_initialization(
         if stacked:
             frame = sum(c.target_stack) - h.PRE_FRAME
             expected = (
-                [c.stack_state, frame, frame] + expected + [c.stack_state, c.counter]
+                [c.stack_state, frame, frame]
+                + ([c.prepare_context] if prepared else [])
+                + expected
+                + [c.stack_state, c.counter]
             )
+        if prepared:
+            expected += [c.counter, c.stack_state, c.stack_state]
         assert pointers == expected

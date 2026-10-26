@@ -86,11 +86,23 @@ with the EE instruction used here. Explicitly assemble the intended quiet form
 and inspect its bytes. Tests that emulate generic MIPS comparisons can otherwise
 hide an incompatibility even when the arithmetic formula is correct.
 
+An emulator IPC acknowledgement does not necessarily mean an asynchronous
+operation has completed. In particular, do not copy a savestate immediately
+after requesting its creation: wait for the output file to be closed or
+atomically replaced, validate the archive, and check expected captured state
+before using it as a recovery point.
+
 When passing an address to GNU `ld -Ttext`, format it with an explicit `0x`
 prefix. A decimal-looking string can be interpreted as hexadecimal. Validate the
 linked section address and decode every published J/JAL target back into an
 approved executable extent; fitting the payload in reserved storage does not
 prove that its branch relocations point there.
+
+`runtime.ee_calls` emits fixed-target C-to-native call veneers that align the
+stack to 16 bytes and preserve full-width SP, GP and RA. Do not assume an EE C
+caller is already 16-byte aligned: its frame can leave SP at an 8-byte boundary.
+The veneer supports the eight register arguments, not additional stack-passed
+arguments. Native target identity and executable ownership remain caller checks.
 
 ## Linux test isolation
 

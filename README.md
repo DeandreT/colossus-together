@@ -35,6 +35,8 @@ shared checkpoint. The single Agro is controlled by its current rider.
 - `render_state/`: bounded, fence-checked snapshots of explicitly supplied ranges.
 - `bootstrap/`: an offline plan for a guarded one-shot game-thread allocation.
 - `streaming/`: two-player streaming-interest planning and native adapter components.
+- `horse_call/`: generation-bound whistle ownership and separate camera-interest
+  bookkeeping, with game integration supplied by explicit adapters.
 - `tests/`: synthetic protocol, linking, patch-safety and lifecycle tests.
 
 These packages are building blocks, not an automatic game installer. Running
@@ -68,13 +70,12 @@ optional tools are absent. Never commit that directory or generated output.
 
 ## Roadmap and repository scope
 
-Finish and qualify local split-screen co-op first. The future native Linux port
-will live in a **separate repository**, with co-op support; online play follows
-there. Difficulty changes will be considered after online play, not as part of
-the current implementation.
+This repository focuses on completing and qualifying local split-screen co-op
+for the PS2 game. Difficulty changes are outside the current scope.
 
-There is no open-source license grant yet. See [NOTICE.md](NOTICE.md) for the
-source, rights and redistribution boundary.
+The project's original code and documentation are available under the
+[MIT License](LICENSE). See [NOTICE.md](NOTICE.md) for the source and third-party
+rights boundary.
 
 The standalone `runtime.xff` reader parses module metadata without the
 decompilation workspace. Its modules work with `runtime.xff_bindings`; reading
