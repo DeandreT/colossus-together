@@ -6,6 +6,7 @@ import shutil
 import struct
 import unittest
 from typing import ClassVar
+from interrupt_model import InterruptModel
 
 from injection.barriers import (
     CLEANUP_CALL,
@@ -123,7 +124,7 @@ class ProtocolTests(unittest.TestCase):
                 Config(*args)
 
 
-class SourceMachine:
+class SourceMachine(InterruptModel):
     """Small test-only interpreter for our emitted scalar/save instructions.
 
     Calls into the game are mocks. This does not emulate the game or PS2.
@@ -211,6 +212,7 @@ class SourceMachine:
         pc = self.labels[label]
         for _ in range(limit):
             line = self.instructions[pc]
+            self.boundary(line)
             op, *args = re.split(r"[ ,]+", line)
             next_pc = pc + 1
             if op in ("b", "beq", "bne", "j", "jal", "jr"):
@@ -219,17 +221,18 @@ class SourceMachine:
                     (self.r[self.reg(args[0])] == self.r[self.reg(args[1])])
                     == (op == "beq")
                 )
+                # Latch the transfer before executing its no-op delay slot.
+                target = args[-1]
+                address = self.r[self.reg(target)] if op == "jr" else None
+                if op == "jal":
+                    self.r[31] = pc + 2
+                self.boundary(self.instructions[pc + 1])
                 next_pc = pc + 2
                 if take:
-                    target = args[-1]
-                    if op == "jal":
-                        self.r[31] = next_pc
                     if target in self.labels:
                         next_pc = self.labels[target]
                     else:
-                        address = (
-                            self.r[self.reg(target)] if op == "jr" else int(target, 0)
-                        )
+                        address = address if op == "jr" else int(target, 0)
                         if external(address, self):
                             return
             elif op in ("nop", "sync"):
@@ -463,8 +466,8 @@ class AssemblerTests(unittest.TestCase):
         for i in range(32):
             self.assertIn(f"swc1 $f{i}, {0x200 + 4 * i}($sp)", result.assembly)
             self.assertIn(f"lwc1 $f{i}, {0x200 + 4 * i}($sp)", result.assembly)
-        self.assertIn("pmfhi $k0", result.assembly)
-        self.assertIn("pmthi $k0", result.assembly)
+        self.assertIn("pmfhi $at", result.assembly)
+        self.assertIn("pmthi $at", result.assembly)
 
 
 if __name__ == "__main__":

@@ -159,10 +159,10 @@ def render(c, words):
     ]
     lines += _capture()
     lines += [
-        f"lq $k0, {POST_FRAME + PRE_RA}($sp)",
-        f"sq $k0, {OUTER_RA}($sp)",
-        f"lq $k0, {POST_FRAME + PRE_SP}($sp)",
-        f"sq $k0, {OUTER_SP}($sp)",
+        f"lq $at, {POST_FRAME + PRE_RA}($sp)",
+        f"sq $at, {OUTER_RA}($sp)",
+        f"lq $at, {POST_FRAME + PRE_SP}($sp)",
+        f"sq $at, {OUTER_SP}($sp)",
     ]
     lines += _load("$t0", "state")
     lines += ["lw $t1, 0($t0)", "bne $t1, $zero, done", "nop"]

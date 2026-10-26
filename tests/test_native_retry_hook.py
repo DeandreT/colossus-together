@@ -100,11 +100,10 @@ class Machine(model.Machine):
         self.events.append(name)
         if name == "original_scr_run":
             assert self.events == [name], "original must run exactly once"
-            for i in range(1, 32):
-                if i not in (29, 31):
-                    assert self.r[i] == self.entry[0][i], (
-                        f"changed original arg/register {i}"
-                    )
+            for i in self.compared_registers():
+                assert self.r[i] == self.entry[0][i], (
+                    f"changed original arg/register {i}"
+                )
             assert self.low("sp") == (self.entry[0][29] & model.MASK64) - h.PRE_FRAME
             self.home_clobber()
             if pause:
@@ -133,6 +132,7 @@ class Machine(model.Machine):
     def run(self, *, pause=False):
         assert not self.suspended, "resume original before resuming caller"
         for _ in range(500):
+            self.boundary(self.lines[self.pc])
             op, *tail = self.lines[self.pc].split(maxsplit=1)
             self.pc += 1
             args = tail[0].split(", ") if tail else []
@@ -140,16 +140,21 @@ class Machine(model.Machine):
                 continue
             if op in ("beq", "bne", "jal", "jr"):
                 assert self.lines[self.pc] == "nop"
+                take = op in ("jal", "jr") or (
+                    (self.low(args[0]) == self.low(args[1])) == (op == "beq")
+                )
+                if op == "jal":
+                    self.set("ra", self.c.code + (self.pc + 1) * 4)
+                self.boundary(self.lines[self.pc])
                 self.pc += 1
                 if op == "jr":
                     assert self.r[31] == self.entry[0][31]
                     return
                 if op == "jal":
-                    self.set("ra", self.c.code + self.pc * 4)
                     self.external(args[0], pause)
                     if self.suspended:
                         return
-                elif (self.low(args[0]) == self.low(args[1])) == (op == "beq"):
+                elif take:
                     self.pc = self.labels[args[2]]
             elif op in ("sq", "lq", "sw", "lw", "swc1", "lwc1"):
                 match = re.fullmatch(r"(-?\d+)\((\$\w+)\)", args[1])
@@ -207,7 +212,7 @@ class Machine(model.Machine):
     def assert_preserved(self):
         expected = self.post[0].copy()
         expected[29], expected[31] = self.entry[0][29], self.entry[0][31]
-        assert self.snapshot() == (expected, *self.post[1:])
+        self.assert_context(self.snapshot(), (expected, *self.post[1:]))
         assert self.fpacc == 0x7FA12345 and self.vu == (0x12345678,) * 32
         sp = self.entry[0][29] & model.MASK64
         assert all(

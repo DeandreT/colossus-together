@@ -150,9 +150,8 @@ class Machine(model.Machine):
             ["prepare_target"] if self.c.prepare_target is not None else []
         ), "exactly one actual render call"
         self.events.append(name)
-        for i in range(1, 32):
-            if i not in (29, 31):
-                assert self.r[i] == self.entry[0][i], f"changed input {i}"
+        for i in self.compared_registers():
+            assert self.r[i] == self.entry[0][i], f"changed input {i}"
         assert self.snapshot()[1:] == self.entry[1:], (
             "changed incoming FPU/special state"
         )
@@ -184,6 +183,7 @@ class Machine(model.Machine):
                 lines.append(line)
         pc = self.continuation if resume else labels["hook_render"]
         for _ in range(1000):
+            self.boundary(lines[pc])
             op, *tail = lines[pc].split(maxsplit=1)
             pc += 1
             args = tail[0].split(", ") if tail else []
@@ -191,15 +191,20 @@ class Machine(model.Machine):
                 continue
             if op in ("beq", "bne", "jal", "jr"):
                 assert lines[pc] == "nop"
+                take = op in ("jal", "jr") or (
+                    (self.low(args[0]) == self.low(args[1])) == (op == "beq")
+                )
+                if op == "jal":
+                    self.set("ra", self.c.code + (pc + 1) * 4)
+                self.boundary(lines[pc])
                 pc += 1
                 if op == "jr":
                     assert self.r[31] == self.entry[0][31]
                     return
                 if op == "jal":
-                    self.set("ra", self.c.code + pc * 4)
                     self.continuation = pc
                     self.external(args[0])
-                elif (self.low(args[0]) == self.low(args[1])) == (op == "beq"):
+                elif take:
                     pc = labels[args[2]]
             elif op in ("sq", "lq", "sw", "lw", "swc1", "lwc1"):
                 match = re.fullmatch(r"(-?\d+)\((\$\w+)\)", args[1])
@@ -264,7 +269,7 @@ class Machine(model.Machine):
     def assert_preserved(self):
         expected = self.post[0].copy()
         expected[29], expected[31] = self.entry[0][29], self.entry[0][31]
-        assert self.snapshot() == (expected, *self.post[1:])
+        self.assert_context(self.snapshot(), (expected, *self.post[1:]))
         assert self.events == (
             ["prepare_target"] if self.c.prepare_target is not None else []
         ) + ["actual_render"] + (
@@ -418,10 +423,10 @@ def test_default_assembly_remains_byte_for_byte_unchanged():
     "fenced,expected",
     [
         (False, "400140c605f34ac23817374e196c61e09dadd72892f5af3bdcf3c7a6f20aeefc"),
-        (True, "a0de651f7a1a85ebb27edd71132a59bb4fd7f323e6488a9edcdf7e3e1bd734a8"),
+        (True, "6bafbf4688dd8969b3e8f91e546db07822fbac412956e6ea66249b66b4efa776"),
     ],
 )
-def test_no_prepare_private_stack_assembly_is_unchanged(fenced, expected):
+def test_no_prepare_private_stack_assembly_fingerprint(fenced, expected):
     c = stacked_config(fenced)
     assert (
         hashlib.sha256(h.render(c, h.guard_expectations(c)).encode()).hexdigest()

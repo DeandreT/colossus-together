@@ -3,8 +3,10 @@
 import struct
 import unittest
 from dataclasses import replace
+from unittest.mock import patch
 
 import test_streaming_native as base
+from interrupt_model import InterruptModel
 
 from streaming import hooks as h
 from local_config import original_file
@@ -24,7 +26,7 @@ def config():
     )
 
 
-class Machine(base.Machine):
+class Machine(InterruptModel, base.Machine):
     def __init__(self, c, linked, symbol, args=()):
         super().__init__(c, linked, symbol, args)
         self.hi = (0xFFAA << 96) | 0x123456789
@@ -44,7 +46,9 @@ class Machine(base.Machine):
     def compare(self, case, wanted, except_regs=()):
         actual = self.snapshot()
         for i in range(32):
-            if i not in except_regs:
+            if i not in except_regs and not (
+                self.interrupt_at is not None and i in (26, 27)
+            ):
                 case.assertEqual(actual[0][i], wanted[0][i], f"GPR {i}")
         case.assertEqual(actual[1:], wanted[1:])
 
@@ -75,6 +79,7 @@ class Machine(base.Machine):
         self.pc = ret
 
     def execute(self, pc):
+        self.boundary(f"{pc:#x}")
         self.trace.append(pc)
         word = self.word(pc)
         op, rs, rt = word >> 26, word >> 21 & 31, word >> 16 & 31
@@ -151,6 +156,9 @@ class HookTests(unittest.TestCase):
         m.before = m.snapshot()
 
         def chip(cpu):
+            # The pre-call copy scratch must not replace the original AT value,
+            # including its upper lanes, when entering the real callee.
+            self.assertEqual(cpu.reg[1], cpu.before[0][1])
             self.assertEqual([cpu.low(i) for i in range(4, 12)], list(args))
             self.assertEqual(cpu.low(29), cpu.start_sp - h.PRE_FRAME)
             self.assertEqual(cpu.read(cpu.low(29), 64), bytes([0xA7]) * 64)
@@ -168,6 +176,74 @@ class HookTests(unittest.TestCase):
         self.assertEqual(m.reg[29], m.before[0][29])
         self.assertEqual(m.reg[31], m.before[0][31])
         self.assertEqual(m.start_sp - m.minimum_sp, h.PRE_FRAME + h.FULL_FRAME)
+
+    def test_interrupts_during_begin_and_submit(self):
+        # execute() is called for individual instructions, including delay slots.
+        # Exercise both full capture/restore and the pre-capture argument copies.
+        with patch.object(Machine, "interrupt_at", "all"):
+            self.test_begin_original_first_preserves_actual_post_state()
+            self.test_submit_ten_words_no_automatic_original()
+            self.test_predicate_result_only()
+
+    def test_interrupt_mutation_detects_begin_and_submit_scratch(self):
+        old = h.render(self.c).replace("$at", "$k0").replace("$t9", "$k1")
+        linked = h._assemble(self.c, old, AS)
+        with patch.object(self, "linked", linked), patch.object(Machine, "interrupt_at", "all"):
+            with self.assertRaises(AssertionError):
+                self.test_begin_original_first_preserves_actual_post_state()
+            with self.assertRaises(AssertionError):
+                self.test_submit_ten_words_no_automatic_original()
+
+    def interrupt_case(self, symbol, interrupt_at, linked=None):
+        m = Machine(self.c, linked or self.linked, symbol, tuple(range(10, 18)))
+        m.interrupt_at = interrupt_at
+        if symbol == "hook_begin":
+            def chip(cpu):
+                for i in range(1, 32):
+                    if i not in (26, 27, 29, 31):
+                        self.assertEqual(cpu.reg[i], cpu.before[0][i], f"input GPR {i}")
+                self.assertEqual(cpu.read(cpu.low(29), 64), bytes([0xA7]) * 64)
+            m.handlers["orig_chip"] = chip
+        else:
+            m.write(m.start_sp, struct.pack("<I", 18))
+            m.write(m.start_sp + 8, struct.pack("<I", 19))
+
+            def submit(cpu):
+                self.assertEqual(struct.unpack("<10I", cpu.read(cpu.low(5), 40)),
+                                 tuple(range(10, 20)))
+            m.handlers["cb_submit"] = submit
+        m.run()
+        if symbol == "hook_begin":
+            m.compare(self, m.native_post, except_regs=(29, 31))
+            self.assertEqual(m.reg[29], m.before[0][29])
+            self.assertEqual(m.reg[31], m.before[0][31])
+        else:
+            m.compare(self, m.before)
+        return m
+
+    def test_every_begin_and_submit_instruction_boundary(self):
+        for symbol in ("hook_begin", "hook_submit"):
+            baseline = self.interrupt_case(symbol, None)
+            for index in range(len(baseline.boundaries)):
+                with self.subTest(symbol=symbol, boundary=index):
+                    self.interrupt_case(symbol, index)
+
+    def test_interrupt_mutations_isolate_precall_and_stack_dereference(self):
+        source = h.render(self.c)
+        precall, rest = source.split("jal orig_chip", 1)
+        old_begin = precall.replace("$at", "$k0") + "jal orig_chip" + rest
+        stack_copy = (f"lq $at,{h.SAVED_SP}($sp)\n"
+                      "lw $t9,0($at)\n"
+                      f"sw $t9,{h.BATCH_ARGS + 32}($sp)\n"
+                      "lw $t9,8($at)\n"
+                      f"sw $t9,{h.BATCH_ARGS + 36}($sp)")
+        self.assertIn(stack_copy, source)
+        old_submit = source.replace(stack_copy, stack_copy.replace("$at", "$k0")
+                                    .replace("$t9", "$k1"))
+        for symbol, text in (("hook_begin", old_begin), ("hook_submit", old_submit)):
+            linked = h._assemble(self.c, text, AS)
+            with self.subTest(symbol=symbol), self.assertRaises(AssertionError):
+                self.interrupt_case(symbol, "all", linked)
 
     def test_submit_ten_words_no_automatic_original(self):
         for site in (0x20CB8, 0x20DB8, 0x20FE4):

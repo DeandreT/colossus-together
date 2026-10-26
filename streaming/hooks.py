@@ -193,16 +193,17 @@ def _load(reg, value):
 
 
 def _capture():
+    # Use captured AT, never interrupt-volatile K0/K1, for multi-instruction copies.
     lines = ["sq $sp,-16($sp)", f"addiu $sp,$sp,-{FULL_FRAME}"]
     lines += [f"sq ${i},{GPRS + i * 16}($sp)" for i in range(1, 32) if i != 29]
     lines += [f"swc1 $f{i},{FPRS + i * 4}($sp)" for i in range(32)]
-    return lines + ["pmfhi $k0", f"sq $k0,{HI}($sp)", "pmflo $k0", f"sq $k0,{LO}($sp)",
-                    "mfsa $k0", f"sw $k0,{SA}($sp)", "cfc1 $k0,$31", f"sw $k0,{FCSR}($sp)"]
+    return lines + ["pmfhi $at", f"sq $at,{HI}($sp)", "pmflo $at", f"sq $at,{LO}($sp)",
+                    "mfsa $at", f"sw $at,{SA}($sp)", "cfc1 $at,$31", f"sw $at,{FCSR}($sp)"]
 
 
 def _restore(result=False):
-    lines = [f"lq $k0,{HI}($sp)", "pmthi $k0", f"lq $k0,{LO}($sp)", "pmtlo $k0",
-             f"lw $k0,{SA}($sp)", "mtsa $k0", f"lw $k0,{FCSR}($sp)", "ctc1 $k0,$31"]
+    lines = [f"lq $at,{HI}($sp)", "pmthi $at", f"lq $at,{LO}($sp)", "pmtlo $at",
+             f"lw $at,{SA}($sp)", "mtsa $at", f"lw $at,{FCSR}($sp)", "ctc1 $at,$31"]
     lines += [f"lwc1 $f{i},{FPRS + i * 4}($sp)" for i in range(32)]
     lines += [f"lq ${i},{GPRS + i * 16}($sp)" for i in range(1, 32) if i != 29 and not (result and i == 2)]
     if result:
@@ -222,17 +223,19 @@ def render(c):
     for name, address in c.originals.items():
         lines += [f".equ orig_{name},0x{address:x}"]
     lines += [".globl hook_begin", "hook_begin:", "sq $ra,-64($sp)",
-              "sq $sp,-48($sp)", "sq $k0,-32($sp)", f"addiu $sp,$sp,-{PRE_FRAME}"]
+              "sq $sp,-48($sp)", "sq $at,-32($sp)", f"addiu $sp,$sp,-{PRE_FRAME}"]
+    # Preserve incoming AT around pre-call copies, before the full post-capture.
     for off in range(0, 64, 16):
-        lines += [f"lq $k0,{PRE_FRAME + off}($sp)", f"sq $k0,{off}($sp)"]
-    lines += ["lq $k0,96($sp)", "jal orig_chip", "nop"] + _capture()
+        lines += [f"lq $at,{PRE_FRAME + off}($sp)", f"sq $at,{off}($sp)"]
+    lines += ["lq $at,96($sp)", "jal orig_chip", "nop"] + _capture()
     lines += _load("a0", c.context) + _callback(c, "begin") + _restore()
     lines += ["lq $ra,64($sp)", "lq $sp,80($sp)", "jr $ra", "nop", ".balign 16",
               ".globl hook_submit", "hook_submit:"] + _capture()
     for i in range(8):
-        lines += [f"lw $k0,{GPRS + (4 + i) * 16}($sp)", f"sw $k0,{BATCH_ARGS + i * 4}($sp)"]
-    lines += [f"lq $k0,{SAVED_SP}($sp)", "lw $k1,0($k0)", f"sw $k1,{BATCH_ARGS + 32}($sp)",
-              "lw $k1,8($k0)", f"sw $k1,{BATCH_ARGS + 36}($sp)"]
+        lines += [f"lw $at,{GPRS + (4 + i) * 16}($sp)", f"sw $at,{BATCH_ARGS + i * 4}($sp)"]
+    # Both AT and T9 have already been captured at full width.
+    lines += [f"lq $at,{SAVED_SP}($sp)", "lw $t9,0($at)", f"sw $t9,{BATCH_ARGS + 32}($sp)",
+              "lw $t9,8($at)", f"sw $t9,{BATCH_ARGS + 36}($sp)"]
     lines += _load("a0", c.context) + [f"addiu $a1,$sp,{BATCH_ARGS}"]
     lines += _callback(c, "submit") + _restore() + ["jr $ra", "nop", ".balign 16",
                                                     ".globl hook_predicate", "hook_predicate:"] + _capture()

@@ -147,32 +147,32 @@ def _load(reg, symbol):
 
 
 def _capture():
-    # k0 itself is saved before it is used to transfer special registers.
+    # Save AT before using it as scratch. Interrupts may destroy K0/K1.
     lines = [f"sq ${i}, {GPRS + i * 16}($sp)" for i in range(1, 32) if i != 29]
     lines += [f"swc1 $f{i}, {FPRS + i * 4}($sp)" for i in range(32)]
     lines += [
-        "pmfhi $k0",
-        f"sq $k0, {HI}($sp)",
-        "pmflo $k0",
-        f"sq $k0, {LO}($sp)",
-        "mfsa $k0",
-        f"sw $k0, {SA}($sp)",
-        "cfc1 $k0, $31",
-        f"sw $k0, {FCSR}($sp)",
+        "pmfhi $at",
+        f"sq $at, {HI}($sp)",
+        "pmflo $at",
+        f"sq $at, {LO}($sp)",
+        "mfsa $at",
+        f"sw $at, {SA}($sp)",
+        "cfc1 $at, $31",
+        f"sw $at, {FCSR}($sp)",
     ]
     return lines
 
 
 def _restore():
     lines = [
-        f"lq $k0, {HI}($sp)",
-        "pmthi $k0",
-        f"lq $k0, {LO}($sp)",
-        "pmtlo $k0",
-        f"lw $k0, {SA}($sp)",
-        "mtsa $k0",
-        f"lw $k0, {FCSR}($sp)",
-        "ctc1 $k0, $31",
+        f"lq $at, {HI}($sp)",
+        "pmthi $at",
+        f"lq $at, {LO}($sp)",
+        "pmtlo $at",
+        f"lw $at, {SA}($sp)",
+        "mtsa $at",
+        f"lw $at, {FCSR}($sp)",
+        "ctc1 $at, $31",
     ]
     lines += [f"lwc1 $f{i}, {FPRS + i * 4}($sp)" for i in range(32)]
     lines += [f"lq ${i}, {GPRS + i * 16}($sp)" for i in range(1, 31) if i != 29]

@@ -104,6 +104,12 @@ caller is already 16-byte aligned: its frame can leave SP at an 8-byte boundary.
 The veneer supports the eight register arguments, not additional stack-passed
 arguments. Native target identity and executable ownership remain caller checks.
 
+EE hooks must not use the kernel-reserved `k0`/`k1` registers as working values:
+an interrupt can overwrite them between instructions. Capture an ordinary
+register before using it as scratch, then restore it on every return path.
+Using `at` requires `.set noat` and full-width preservation. Merely saving `k0`
+once does not protect a later temporary value held in it from an interrupt.
+
 ## Linux test isolation
 
 PCSX2 appends `PCSX2` to `-datapath`; pass the private profile's parent directory.

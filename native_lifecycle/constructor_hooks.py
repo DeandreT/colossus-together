@@ -151,12 +151,12 @@ def render(c, words):
             f"addiu $sp, $sp, -{FRAME}",
         ]
         lines += _capture()
-        # These copies occur only after k0's full post-call value was captured.
+        # AT's full post-call value was captured before using it as scratch.
         lines += [
-            f"lq $k0, {FRAME + PRE_RA}($sp)",
-            f"sq $k0, {OUTER_RA}($sp)",
-            f"lq $k0, {FRAME + PRE_SP}($sp)",
-            f"sq $k0, {OUTER_SP}($sp)",
+            f"lq $at, {FRAME + PRE_RA}($sp)",
+            f"sq $at, {OUTER_RA}($sp)",
+            f"lq $at, {FRAME + PRE_SP}($sp)",
+            f"sq $at, {OUTER_SP}($sp)",
             "beq $v0, $zero, done_" + name,
             "nop",
             f"addiu $a3, $zero, {family}",

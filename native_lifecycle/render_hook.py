@@ -316,8 +316,8 @@ def _prepare():
     lines = ["sq $sp, -16($sp)", f"addiu $sp, $sp, -{POST_FRAME}"]
     lines += _capture()
     lines += [
-        f"lq $k0, {POST_FRAME + PRE_RA}($sp)",
-        f"sq $k0, {OUTER_RA}($sp)",
+        f"lq $at, {POST_FRAME + PRE_RA}($sp)",
+        f"sq $at, {OUTER_RA}($sp)",
     ]
     lines += _load("$a0", "prepare_context")
     lines += ["jal prepare_target", "nop", "bne $v0, $zero, prepare_failed", "nop"]
@@ -383,10 +383,10 @@ def render(c, words):
         lines += [f"addiu $sp, $sp, -{POST_FRAME}"]
         lines += _capture()
         lines += [
-            f"lq $k0, {POST_FRAME + PRE_RA}($sp)",
-            f"sq $k0, {OUTER_RA}($sp)",
-            f"lq $k0, {POST_FRAME + PRE_SP}($sp)",
-            f"sq $k0, {OUTER_SP}($sp)",
+            f"lq $at, {POST_FRAME + PRE_RA}($sp)",
+            f"sq $at, {OUTER_RA}($sp)",
+            f"lq $at, {POST_FRAME + PRE_SP}($sp)",
+            f"sq $at, {OUTER_SP}($sp)",
         ]
         lines += _load("$a0", "fence_state")
         lines += [
