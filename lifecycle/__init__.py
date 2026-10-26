@@ -1,0 +1,42 @@
+"""Pure event/action lifecycle for an independently owned second player."""
+
+from .machine import (
+    Action,
+    AcquireDeleteHold,
+    AllowResourceUnload,
+    CanonicalDeleteRequested,
+    CanonicalFinalFree,
+    CanonicalRegistered,
+    ConstructorCaptured,
+    ConstructorRecord,
+    CreateMain,
+    CreateVisual,
+    CreationResult,
+    DeleteOwned,
+    Event,
+    GameModeChanged,
+    GameplayReady,
+    Lifecycle,
+    OwnedDeleteRequested,
+    OwnedFinalFree,
+    ParentDeletionPrepared,
+    ParentDeleteHoldReleased,
+    Part,
+    ResourceUnloadRequested,
+    ReleaseDeleteHold,
+    RespawnRequested,
+    RetryRequested,
+    State,
+    TeardownFailed,
+)
+
+__all__ = [
+    "AcquireDeleteHold", "ReleaseDeleteHold", "ParentDeletionPrepared", "ParentDeleteHoldReleased",
+    "Action", "Event", "AllowResourceUnload", "CanonicalDeleteRequested", "CanonicalFinalFree",
+    "CanonicalRegistered", "ConstructorCaptured", "ConstructorRecord",
+    "CreateMain", "CreateVisual", "CreationResult", "DeleteOwned",
+    "GameModeChanged", "GameplayReady", "Lifecycle", "OwnedDeleteRequested",
+    "OwnedFinalFree", "Part", "ResourceUnloadRequested", "RespawnRequested",
+    "RetryRequested", "State",
+    "TeardownFailed",
+]
