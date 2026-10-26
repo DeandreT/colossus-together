@@ -325,8 +325,10 @@ def render(c, values):
     ]
     lines += _load("$v0", c.pending_committed)
     lines += ["lw $v0, 0($v0)", "beq $v0, $zero, deny", "nop"]
-    lines += _load("$v1", c.horse)
-    lines += [f"lw $v1, {RELATION_OFFSET}($v1)", "bne $v0, $v1, deny", "nop"]
+    # Committed is a nonzero flag, not an actor pointer. Reclamation still
+    # requires the horse's native relation to be idle (self-controlled).
+    lines += _load("$v0", c.horse)
+    lines += [f"lw $v1, {RELATION_OFFSET}($v0)", "bne $v0, $v1, deny", "nop"]
     lines += _load("$v0", c.pending_owner)
     lines += [
         "lw $v1, 0($v0)",

@@ -28,9 +28,9 @@ not part of `GetCharacterClass` identity.
 An identified mount request is denied only for the other registered occupant or
 the other registered pending owner. Self, idle, unknown and stale authority
 fall through to native behavior. The existing stale-committed exception is
-retained: when the committed value matches the current relation and the pending
-owner has a valid control object with mounted flag zero, fall through. The arm
-payload starts at zero; enabling it requires externally established authority.
+retained: when the committed flag is nonzero, the horse controls itself, and the
+pending owner has a valid control object with mounted flag zero, fall through.
+The arm payload starts at zero; enabling it requires externally established authority.
 All untouched guards are rechecked at entry; the original two entry words are
 pre-install guards only, since installation replaces them. Reads are not atomic. The external owner
 must keep reviewed allocations stable during a call and revoke the arm before
