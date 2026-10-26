@@ -82,7 +82,7 @@ class Machine:
         self.put(self.low("a1") + valid, 1)
         self.put(self.c.horse + h.RELATION_OFFSET, self.c.players[1 - actor])
         self.put(self.c.pending_owner, self.c.players[1 - actor])
-        self.put(self.c.pending_committed, self.c.players[1 - actor])
+        self.put(self.c.pending_committed, 1)
         for i, p in enumerate(self.c.players):
             control = 0x700000 + i * 0x10000
             self.put(p + h.CONTROL_OFFSET, control)
@@ -233,7 +233,7 @@ def test_fallthrough_original_prologue_once(scenario):
     if scenario == "unknown_pending":
         m.put(m.c.pending_owner, 0x777770)
     if scenario == "stale_committed":
-        m.put(m.c.pending_committed, m.c.horse)
+        m.put(m.c.pending_committed, 1)
         m.put(0x710000 + h.MOUNTED_OFFSET, 0)
     if scenario == "disarmed":
         m.put(m.c.arm, 0)
@@ -323,8 +323,30 @@ def test_other_pending_overrides_self_relation(actor):
 def test_committed_pending_retained_for_null_or_mounted_control(control):
     m = Machine()
     m.put(m.c.horse + h.RELATION_OFFSET, m.c.horse)
-    m.put(m.c.pending_committed, m.c.horse)
+    m.put(m.c.pending_committed, 1)
     m.put(m.c.players[1] + h.CONTROL_OFFSET, control)
+    assert m.run()
+
+
+@pytest.mark.parametrize("actor", (0, 1))
+@pytest.mark.parametrize("committed", (1, 2, 0xFFFFFFFF))
+def test_nonzero_committed_flag_allows_native_stale_reservation_reclaim(actor, committed):
+    m = Machine(actor=actor)
+    other = m.c.players[1 - actor]
+    m.put(m.c.horse + h.RELATION_OFFSET, m.c.horse)
+    m.put(m.c.pending_committed, committed)
+    control = m.get(other + h.CONTROL_OFFSET)
+    m.put(control + h.MOUNTED_OFFSET, 0)
+    assert not m.run()
+
+
+@pytest.mark.parametrize("actor", (0, 1))
+def test_uncommitted_reservation_is_not_reclaimed_even_when_unmounted(actor):
+    m = Machine(actor=actor)
+    other = m.c.players[1 - actor]
+    m.put(m.c.horse + h.RELATION_OFFSET, m.c.horse)
+    m.put(m.c.pending_committed, 0)
+    m.put(m.get(other + h.CONTROL_OFFSET) + h.MOUNTED_OFFSET, 0)
     assert m.run()
 
 
