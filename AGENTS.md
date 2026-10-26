@@ -1,8 +1,7 @@
 # Colossus Together
 
 This repository contains source-only development components for the PS2 local
-co-op project. It is not a playable release or the future native Linux port.
-The native port belongs in a separate repository, with co-op support.
+co-op project. It is not a playable release.
 
 ## Publication boundary
 
@@ -15,8 +14,9 @@ The native port belongs in a separate repository, with co-op support.
 - Keep optional local inputs in the ignored `.local-game-inputs/` directory or
   select them with `SOTC_ORIGINAL_DIR`. Discover EE tools through PATH,
   `SOTC_EE_CC` and `SOTC_EE_AS`; do not add personal absolute paths.
-- No open-source license has been selected. Do not grant or change licensing
-  without the owner's approval. See `NOTICE.md`.
+- Original project code and documentation use the MIT license in `LICENSE`.
+  Preserve copyright notices and the third-party exclusions in `NOTICE.md`;
+  the project license does not license the original game or its assets.
 
 ## Validation
 
@@ -25,5 +25,13 @@ original-file and EE-tool tests may skip when those inputs are absent. Do not
 present synthetic test success as emulator, gameplay or full-game qualification.
 Preserve fail-closed identity, memory-ownership, lifetime and graphics-fence checks.
 
-Complete local co-op before the separate native port and online work. Difficulty
-changes are a later discussion after online play, not current scope.
+Complete and qualify local split-screen co-op. Difficulty changes are outside
+the current scope.
+
+## Work tracking
+
+Track implementation and remaining qualification in GitHub issues. Reuse an
+existing issue for the same outcome and link scoped pull requests to it. Keep
+incomplete gameplay qualification open when a supporting code change merges.
+Issues and pull requests must follow the same source-only publication boundary
+as the repository; never attach private game data or local investigation files.

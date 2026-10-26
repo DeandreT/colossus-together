@@ -12,6 +12,7 @@ Supply your own lawfully obtained game files for optional local validation.
 Do not upload those files or generated artifacts in issues or contributions.
 
 Copyright 2026 Deandre Thomas, for original contributions he owns.
-No open-source license has been selected or granted for those contributions.
-Public visibility does not grant a redistribution or modification license beyond
-rights provided by applicable law. A license can be selected separately.
+The project's original code and documentation are licensed under the
+[MIT License](LICENSE). This license does not grant rights to third-party game
+code, assets, BIOS files, trademarks or other material owned by their respective
+rights holders.
