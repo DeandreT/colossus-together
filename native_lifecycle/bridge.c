@@ -160,7 +160,10 @@ uint32_t nl_bridge_acknowledge_retired_before(NLBridge *b, uint32_t generation) 
     if (!b || !b->initialized || !generation || generation > b->generation) return 0;
     for (i = 0; i < b->count; ++i) {
         NLBridgeAllocation *r = &b->allocations[i];
-        if (r->state == NL_FREED && r->generation < generation) {
+        /* Canonical still references its tombstone during the native retry gap.
+         * Only a verified replacement admission releases that reference. */
+        if (r->state == NL_FREED && r->generation < generation &&
+            r->id != b->canonical_id) {
             ++removed;
         } else {
             if (kept != i) b->allocations[kept] = *r;

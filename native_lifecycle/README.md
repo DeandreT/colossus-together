@@ -98,6 +98,11 @@ may retain a positively final-freed identity alongside a replacement at the same
 address; it never issues another deletion for the old identity. Two live or
 unknown identities at one address remain an error.
 
+Generation-wide retirement acknowledgement retains the current canonical P1's
+final-freed identity through the native retry gap. A verified replacement
+admission releases that reference; only then may cleanup remove its tombstone.
+Cleanup never turns a known-freed current canonical into an unknown identity.
+
 Stock P2 constructors also need the independently qualified initialization guard:
 skip P2 global `initWeapon`/`SCRPlayerGetWeapon` initialization and shared death-
 alert writes. Those game patches are **not** implemented here. Native constructors

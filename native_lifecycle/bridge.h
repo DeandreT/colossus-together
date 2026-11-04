@@ -116,7 +116,9 @@ NLLifetime nl_bridge_lifetime(void *, NLAddress object, uint32_t id);
 uint32_t nl_bridge_mark_final_free(NLBridge *, NLAddress raw_allocation);
 /* Call only after all users of older, final-freed identities have acknowledged
  * retirement. Older IDs then resolve to MISMATCH without memory reads; live
- * records are retained and the monotonic ID counter is never rewound. */
+ * records are retained and the monotonic ID counter is never rewound. The current
+ * canonical identity is retained even after final-free, until a verified new
+ * canonical admission replaces it; retry gaps must still resolve to FREED. */
 uint32_t nl_bridge_acknowledge_retired_before(NLBridge *, uint32_t generation);
 /* Serialized owner acknowledgement of exact final-freed identities, including
  * the current generation. Caller MUST first release every external reference.
