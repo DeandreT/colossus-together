@@ -431,6 +431,34 @@ int main(int argc, char **argv) {
         before = reads;
         assert(nl_bridge_lifetime(&bridge, P1, id) == NL_FREED && reads == before);
         refresh_canonical();
+    } else if (!strcmp(argv[1], "canonical_gap_ack_new") ||
+               !strcmp(argv[1], "canonical_gap_ack_reused")) {
+        uint32_t replacement = !strcmp(argv[1], "canonical_gap_ack_reused") ? P1 : NEXT_P1;
+        uint32_t last;
+        setup_canonical(0); id = bridge.canonical_id;
+        assert(nl_bridge_mark_final_free(&bridge, RAW1) == 1);
+        assert(nl_bridge_mark_final_free(&bridge, RAW2) == 1);
+        assert(nl_bridge_set_generation(&bridge, 4));
+        forbidden_object = P1; before = reads; last = writes;
+        /* P1 is still referenced by canonical_id during the retry gap. Only
+         * unrelated, retired P2 may be reclaimed, even on repeated ticks. */
+        assert(nl_bridge_acknowledge_retired_before(&bridge, 4) == 1);
+        assert(nl_bridge_acknowledge_retired_before(&bridge, 4) == 0);
+        assert(bridge.count == 1 && bridge.canonical_id == id);
+        assert(nl_bridge_lifetime(&bridge, P1, id) == NL_FREED);
+        assert(reads == before && writes == last && !bridge.fault);
+        /* A fresh constructor/admission, not cleanup, replaces the identity. */
+        if (replacement == P1) forbidden_object = 0;
+        admit(replacement);
+        assert(!bridge.fault && bridge.canonical_object == replacement);
+        assert(bridge.canonical_id > id && bridge.canonical_generation == 2);
+        before = reads; last = writes;
+        assert(nl_bridge_acknowledge_retired_before(&bridge, 4) == 1);
+        assert(bridge.count == 1);
+        assert(nl_bridge_lifetime(&bridge, P1, id) == NL_MISMATCH);
+        assert(reads == before && writes == last);
+        forbidden_object = 0;
+        refresh_canonical();
     } else if (!strcmp(argv[1], "canonical_overflow")) {
         setup_canonical(0); publish();
         bridge.canonical_generation = UINT32_MAX;
@@ -534,6 +562,8 @@ class NativeLifecycleBridgeTests(unittest.TestCase):
             "canonical_new",
             "canonical_reused",
             "canonical_old_freed",
+            "canonical_gap_ack_new",
+            "canonical_gap_ack_reused",
             "canonical_overflow",
             "canonical_partial",
             "canonical_guards",
